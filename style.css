@@ -8,8 +8,6 @@ h1 {
     color: rgb(117, 201, 229);
 }
 
-/*The icon is in white when the background is dark,
-how to let the colors to the icon when it's in dark mode ?*/
 .rasp-icon {
     width: 70px;
     height: auto;
