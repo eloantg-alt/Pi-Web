@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="color-scheme" content="light dark">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <link rel="icon" href="PNG/debian-icon.png" type="image/png">
+        <link rel="stylesheet" href="style.css">
+        <title>Pi - My account</title>
+    </head>
+
+    <body>
+        <div id="placeholder"></div>
+        <div class="page-section">
+            <h1 data-i18n="account.title"></h1>
+
+            <div class="settings-card">
+                <h3 data-i18n="account.avatar"></h3>
+                <div class="avat-section">
+                    <div class="avatar-large" id="avatar-preview"></div>
+                    <div>
+                        <input type="file" id="avatar-input" accept="image/*" style="display:none">
+                        <button class="avatar-upload-btn" onclick="document.getElementById('avatar-input').click()">
+                            <span data-i18n="account.upload"></span>
+                        </button>
+                        <button class="avatar-upload-btn" onclick="removeAvatar()" style="margin-top:0.5rem; display:block;">
+                            <span data-i18n="account.avatar.delete"></span>
+                        </button>
+                    </div>
+                </div>
+                <span class="settings-msg" id="msg-avatar"></span>
+            </div>
+
+            <div class="settings-card">
+                <h3 data-i18n="account.pseudo"></h3>
+                <div class="settings.field">
+                    <label data-i18n="account.pseudo.label"></label>
+                    <input type="text" id="field-pseudo" data-i18n-placeholder="account.pseudo.placeholder">
+                </div>
+                <button class="settings-btn" onclick="savePseudo()" data-i18n="account.pseudo.save"></button>
+                <span class="settings-msg" id="msg-pseudo"></span>
+            </div>
+            <script src="i18n.js"></script>
+            <script src="nav.js"></script>
+            <script src="account.js"></script>
+            <script src="consent.js"></script>
+    </body>
+</html>
