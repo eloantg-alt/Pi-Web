@@ -1,4 +1,5 @@
-import sys, os, json, secrets, smtplib
+import sys, os, json, secrets, smtplib, asyncio, random
+import csv, io
 import httpx
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -6,6 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fastapi import FastAPI, Depends, HTTPException, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from sqlalchemy import create_engine, Column, Integer, String, Text, Boolean, DateTime, Float, ForeignKey
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from pydantic import BaseModel, EmailStr
@@ -978,3 +980,399 @@ def resolve_report(report_id: int, data: RejectSchema, current_user=Depends(requ
     ))
     db.commit()
     return {"message": "Signalement résolu"}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ROUTES — SAISON TRACKING
+# ══════════════════════════════════════════════════════════════════════════════
+
+class SeasonTrackingSchema(BaseModel):
+    season_number:    int
+    episodes_watched: Optional[int] = None
+    episodes_total:   Optional[int] = None
+    status:           Optional[str] = None
+    watch_start:      Optional[str] = None
+    watch_end:        Optional[str] = None
+
+@app.get("/watchlists/{watchlist_id}/entries/{entry_id}/seasons")
+def get_seasons(watchlist_id: int, entry_id: int, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    if not db.query(Watchlist).filter(Watchlist.id == watchlist_id, Watchlist.user_id == current_user.id).first():
+        raise HTTPException(status_code=404, detail="Watchlist introuvable")
+    seasons = db.query(WatchlistSeasonTracking).filter(WatchlistSeasonTracking.entry_id == entry_id).order_by(WatchlistSeasonTracking.season_number).all()
+    return [
+        {
+            "id":               s.id,
+            "entry_id":         s.entry_id,
+            "season_number":    s.season_number,
+            "episodes_watched": s.episodes_watched,
+            "episodes_total":   s.episodes_total,
+            "status":           s.status,
+            "watch_start":      s.watch_start,
+            "watch_end":        s.watch_end,
+        }
+        for s in seasons
+    ]
+
+@app.post("/watchlists/{watchlist_id}/entries/{entry_id}/seasons")
+def add_season(watchlist_id: int, entry_id: int, data: SeasonTrackingSchema, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    if not db.query(Watchlist).filter(Watchlist.id == watchlist_id, Watchlist.user_id == current_user.id).first():
+        raise HTTPException(status_code=404, detail="Watchlist introuvable")
+    existing = db.query(WatchlistSeasonTracking).filter(
+        WatchlistSeasonTracking.entry_id == entry_id,
+        WatchlistSeasonTracking.season_number == data.season_number
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Saison déjà existante")
+    season = WatchlistSeasonTracking(entry_id=entry_id, **data.model_dump())
+    db.add(season)
+    db.commit()
+    db.refresh(season)
+    return {"message": "Saison ajoutée", "id": season.id}
+
+@app.put("/watchlists/{watchlist_id}/entries/{entry_id}/seasons/{season_id}")
+def update_season(watchlist_id: int, entry_id: int, season_id: int, data: SeasonTrackingSchema, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    if not db.query(Watchlist).filter(Watchlist.id == watchlist_id, Watchlist.user_id == current_user.id).first():
+        raise HTTPException(status_code=404, detail="Watchlist introuvable")
+    season = db.query(WatchlistSeasonTracking).filter(WatchlistSeasonTracking.id == season_id, WatchlistSeasonTracking.entry_id == entry_id).first()
+    if not season:
+        raise HTTPException(status_code=404, detail="Saison introuvable")
+    for field, value in data.model_dump(exclude_unset=True).items():
+        setattr(season, field, value)
+    db.commit()
+    return {"message": "Saison mise à jour"}
+
+@app.delete("/watchlists/{watchlist_id}/entries/{entry_id}/seasons/{season_id}")
+def delete_season(watchlist_id: int, entry_id: int, season_id: int, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    if not db.query(Watchlist).filter(Watchlist.id == watchlist_id, Watchlist.user_id == current_user.id).first():
+        raise HTTPException(status_code=404, detail="Watchlist introuvable")
+    season = db.query(WatchlistSeasonTracking).filter(WatchlistSeasonTracking.id == season_id, WatchlistSeasonTracking.entry_id == entry_id).first()
+    if not season:
+        raise HTTPException(status_code=404, detail="Saison introuvable")
+    db.delete(season)
+    db.commit()
+    return {"message": "Saison supprimée"}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ROUTES — NOTIFICATION PREFS
+# ══════════════════════════════════════════════════════════════════════════════
+
+class NotifPrefsSchema(BaseModel):
+    lang:              Optional[str]  = None
+    notify_new_season: Optional[bool] = None
+    notify_new_anime:  Optional[bool] = None
+    notify_admin:      Optional[bool] = None
+    notify_email:      Optional[bool] = None
+    notify_inapp:      Optional[bool] = None
+
+@app.get("/notifications/prefs")
+def get_notif_prefs(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    prefs = db.query(UserNotificationPrefs).filter(UserNotificationPrefs.user_id == current_user.id).first()
+    if not prefs:
+        # Crée les prefs par défaut si elles n'existent pas
+        prefs = UserNotificationPrefs(user_id=current_user.id)
+        db.add(prefs)
+        db.commit()
+    return {
+        "lang":              prefs.lang,
+        "notify_new_season": prefs.notify_new_season,
+        "notify_new_anime":  prefs.notify_new_anime,
+        "notify_admin":      prefs.notify_admin,
+        "notify_email":      prefs.notify_email,
+        "notify_inapp":      prefs.notify_inapp,
+    }
+
+@app.put("/notifications/prefs")
+def update_notif_prefs(data: NotifPrefsSchema, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    prefs = db.query(UserNotificationPrefs).filter(UserNotificationPrefs.user_id == current_user.id).first()
+    if not prefs:
+        prefs = UserNotificationPrefs(user_id=current_user.id)
+        db.add(prefs)
+    for field, value in data.model_dump(exclude_unset=True).items():
+        if value is not None:
+            setattr(prefs, field, value)
+    db.commit()
+    return {"message": "Préférences mises à jour"}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ROUTES — ONBOARDING
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/onboarding/done")
+def mark_onboarding_done(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    current_user.onboarding_done = True
+    db.commit()
+    return {"message": "Onboarding terminé"}
+
+@app.get("/onboarding/status")
+def get_onboarding_status(current_user=Depends(get_current_user)):
+    return {"onboarding_done": current_user.onboarding_done}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ROUTES — RANDOM ANIME ("Quoi regarder ?")
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/anime/random")
+def get_random_anime(
+    mode: str = Query("random", description="'random' ou 'best'"),
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Récupère tous les anime_id déjà dans les watchlists du user
+    user_watchlists = db.query(Watchlist).filter(Watchlist.user_id == current_user.id).all()
+    user_anime_ids = set()
+    for w in user_watchlists:
+        entries = db.query(WatchlistEntry.anime_id).filter(WatchlistEntry.watchlist_id == w.id).all()
+        user_anime_ids.update(e.anime_id for e in entries)
+
+    # Catalogue filtré — exclut ce que le user a déjà
+    query = db.query(Anime).filter(Anime.is_archived == False)
+    if user_anime_ids:
+        query = query.filter(Anime.id.notin_(user_anime_ids))
+
+    animes = query.all()
+    if not animes:
+        raise HTTPException(status_code=404, detail="Aucun animé disponible")
+
+    if mode == "best":
+        # Trie par score moyen des entrées en BDD
+        def avg_score(anime):
+            scores = db.query(WatchlistEntry.score).filter(
+                WatchlistEntry.anime_id == anime.id,
+                WatchlistEntry.score != None
+            ).all()
+            if not scores:
+                return 0
+            return sum(s.score for s in scores) / len(scores)
+        animes_sorted = sorted(animes, key=avg_score, reverse=True)
+        chosen = animes_sorted[0] if animes_sorted else random.choice(animes)
+    else:
+        chosen = random.choice(animes)
+
+    return anime_to_dict(chosen)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ROUTES — EXPORT CSV
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/watchlists/{watchlist_id}/export")
+def export_watchlist_csv(watchlist_id: int, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    watchlist = db.query(Watchlist).filter(Watchlist.id == watchlist_id, Watchlist.user_id == current_user.id).first()
+    if not watchlist:
+        raise HTTPException(status_code=404, detail="Watchlist introuvable")
+
+    entries = db.query(WatchlistEntry).filter(WatchlistEntry.watchlist_id == watchlist_id).all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "titre", "titre_en", "statut", "score", "episodes_vus", "saisons_vues",
+        "debut", "fin", "plateforme", "favori", "a_revoir", "epingle",
+        "avis_perso", "infos_sup", "tags", "date_ajout"
+    ])
+    for e in entries:
+        anime = db.query(Anime).filter(Anime.id == e.anime_id).first()
+        writer.writerow([
+            anime.title if anime else "",
+            anime.title_en if anime else "",
+            e.watch_status or "",
+            e.score or "",
+            e.episodes_watched or "",
+            e.seasons_watched or "",
+            e.watch_start or "",
+            e.watch_end or "",
+            e.platform or "",
+            "oui" if e.is_favorite else "non",
+            "oui" if e.is_to_rewatch else "non",
+            "oui" if e.is_pinned else "non",
+            e.personal_review or "",
+            e.extra_info or "",
+            e.custom_tags or "",
+            e.created_at.isoformat() if e.created_at else "",
+        ])
+
+    output.seek(0)
+    filename = f"watchlist_{watchlist.name.replace(' ', '_')}.csv"
+    return StreamingResponse(
+        io.BytesIO(output.getvalue().encode("utf-8-sig")),  # utf-8-sig = compatible Excel
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
+@app.get("/admin/anime/export")
+def export_catalogue_csv(current_user=Depends(require_admin), db: Session = Depends(get_db)):
+    animes = db.query(Anime).filter(Anime.is_archived == False).all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "id", "titre", "titre_en", "type", "statut", "studio", "auteur",
+        "saisons", "episodes", "duree_ep", "debut", "fin",
+        "genres", "plateformes", "anilist_id", "ajoute_le"
+    ])
+    for a in animes:
+        writer.writerow([
+            a.id, a.title, a.title_en or "", a.type or "", a.anime_status or "",
+            a.studio or "", a.author or "", a.seasons_total or "",
+            a.episodes_total or "", a.episode_duration or "",
+            a.air_start or "", a.air_end or "",
+            a.genres or "", a.platforms or "",
+            a.anilist_id or "",
+            a.created_at.isoformat() if a.created_at else "",
+        ])
+
+    output.seek(0)
+    return StreamingResponse(
+        io.BytesIO(output.getvalue().encode("utf-8-sig")),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=catalogue.csv"}
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ROUTES — CHANGELOG
+# ══════════════════════════════════════════════════════════════════════════════
+
+class ChangelogCreateSchema(BaseModel):
+    title_fr: str
+    title_en: str
+    body_fr:  str
+    body_en:  str
+
+@app.get("/changelog")
+def get_changelog(db: Session = Depends(get_db)):
+    entries = db.query(Changelog).order_by(Changelog.published_at.desc()).limit(20).all()
+    return [
+        {
+            "id":           e.id,
+            "title_fr":     e.title_fr,
+            "title_en":     e.title_en,
+            "body_fr":      e.body_fr,
+            "body_en":      e.body_en,
+            "published_at": e.published_at.isoformat() if e.published_at else None,
+        }
+        for e in entries
+    ]
+
+@app.post("/changelog")
+def create_changelog(data: ChangelogCreateSchema, current_user=Depends(require_admin), db: Session = Depends(get_db)):
+    entry = Changelog(**data.model_dump(), published_by=current_user.id)
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return {"message": "Entrée changelog créée", "id": entry.id}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ROUTES — ADMIN BROADCASTS
+# ══════════════════════════════════════════════════════════════════════════════
+
+class BroadcastSchema(BaseModel):
+    title_fr:     str
+    title_en:     str
+    body_fr:      str
+    body_en:      str
+
+@app.post("/admin/broadcast")
+def send_broadcast(data: BroadcastSchema, current_user=Depends(require_admin), db: Session = Depends(get_db)):
+    users = db.query(User).all()
+    notifs = []
+    for user in users:
+        prefs = db.query(UserNotificationPrefs).filter(UserNotificationPrefs.user_id == user.id).first()
+        if prefs and not prefs.notify_admin:
+            continue
+        notifs.append(Notification(
+            user_id=user.id, type="admin_message",
+            title_fr=data.title_fr, title_en=data.title_en,
+            body_fr=data.body_fr,   body_en=data.body_en,
+        ))
+    db.add_all(notifs)
+    broadcast = AdminBroadcast(
+        title_fr=data.title_fr, title_en=data.title_en,
+        body_fr=data.body_fr,   body_en=data.body_en,
+        sent_at=datetime.utcnow(), sent_by=current_user.id,
+        recipient_count=len(notifs)
+    )
+    db.add(broadcast)
+    db.commit()
+    return {"message": f"Broadcast envoyé à {len(notifs)} utilisateurs"}
+
+@app.get("/admin/broadcasts")
+def get_broadcasts(current_user=Depends(require_admin), db: Session = Depends(get_db)):
+    broadcasts = db.query(AdminBroadcast).order_by(AdminBroadcast.sent_at.desc()).limit(20).all()
+    return [
+        {
+            "id":              b.id,
+            "title_fr":        b.title_fr,
+            "title_en":        b.title_en,
+            "sent_at":         b.sent_at.isoformat() if b.sent_at else None,
+            "recipient_count": b.recipient_count,
+        }
+        for b in broadcasts
+    ]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  JOB ANILIST QUOTIDIEN — mise à jour animés "airing"
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def refresh_airing_animes():
+    """
+    Tourne en background au démarrage puis toutes les 24h.
+    Met à jour episodes_total et anime_status des animés 'airing' depuis AniList.
+    Respecte la limite de 90 req/min (pause entre chaque appel).
+    """
+    await asyncio.sleep(30)  # Attend 30s après le démarrage pour ne pas bloquer
+    while True:
+        db = SessionLocal()
+        try:
+            airing = db.query(Anime).filter(
+                Anime.anime_status == "airing",
+                Anime.anilist_id != None,
+                Anime.is_archived == False
+            ).all()
+
+            gql_query = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    status
+                    episodes
+                    nextAiringEpisode { episode }
+                }
+            }
+            """
+            async with httpx.AsyncClient() as client:
+                for anime in airing:
+                    try:
+                        resp = await client.post(
+                            "https://graphql.anilist.co",
+                            json={"query": gql_query, "variables": {"id": anime.anilist_id}},
+                            timeout=10.0
+                        )
+                        data = resp.json().get("data", {}).get("Media", {})
+                        if data:
+                            new_status   = data.get("status", "").lower()
+                            new_episodes = data.get("episodes")
+                            if new_status and new_status != anime.anime_status:
+                                anime.anime_status = new_status
+                            if new_episodes and new_episodes != anime.episodes_total:
+                                anime.episodes_total = new_episodes
+                        db.commit()
+                        await asyncio.sleep(0.7)  # ~85 req/min max → respecte la limite AniList
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        finally:
+            db.close()
+
+        await asyncio.sleep(86400)  # 24h
+
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(refresh_airing_animes())
