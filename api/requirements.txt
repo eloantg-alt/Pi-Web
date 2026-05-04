@@ -1,0 +1,78 @@
+# ─────────────────────────────────────────────
+#  REQUIREMENTS.TXT — Dépendances du projet Pi
+# ─────────────────────────────────────────────
+# Ce fichier liste toutes les librairies Python
+# dont ton projet a besoin pour fonctionner.
+#
+# Pour les installer : pip install -r requirements.txt
+# (Le "- r" signifie "lis ce fichier et installe tout")
+# ─────────────────────────────────────────────
+
+
+# ── SERVEUR WEB ──────────────────────────────
+fastapi==0.115.5
+# FastAPI : le framework qui gère tes routes HTTP
+# (les @app.get, @app.post, etc. dans main.py)
+
+uvicorn==0.32.1
+# Uvicorn : le serveur qui "lance" FastAPI.
+# Sans lui, ton code Python ne peut pas recevoir
+# des requêtes HTTP. C'est lui que tu démarres
+# avec : uvicorn main:app --reload
+
+
+# ── BASE DE DONNÉES ───────────────────────────
+sqlalchemy==2.0.36
+# SQLAlchemy : l'ORM (Object Relational Mapper).
+# Il te permet d'écrire des classes Python (User,
+# Anime...) au lieu d'écrire du SQL brut.
+# Il traduit tes objets Python en lignes SQLite.
+
+
+# ── VALIDATION DES DONNÉES ────────────────────
+pydantic[email]==2.10.2
+# Pydantic : valide automatiquement les données
+# reçues dans les requêtes HTTP.
+# Ex : si quelqu'un envoie un email mal formaté,
+# Pydantic renvoie une erreur avant même que
+# ton code s'exécute.
+# [email] = extension pour valider les adresses email
+
+
+# ── SÉCURITÉ / AUTH ───────────────────────────
+bcrypt==4.2.1
+# Bcrypt : algorithme de hachage de mots de passe.
+# Il transforme "monMotDePasse123" en une chaîne
+# illisible stockée en BDD. Même toi tu ne peux
+# pas retrouver le mot de passe original.
+
+python-jose[cryptography]==3.3.0
+# Python-jose : gère les JWT (JSON Web Tokens).
+# Un JWT est le "ticket d'authentification"
+# que tu donnes à l'utilisateur après connexion.
+# [cryptography] = extension nécessaire pour signer les tokens
+
+
+# ── CONFIGURATION ─────────────────────────────
+python-dotenv==1.0.1
+# Python-dotenv : lit ton fichier .env
+# (SECRET_KEY, SMTP_PASSWORD, etc.) et les
+# injecte comme variables d'environnement.
+# Évite de mettre des secrets directement dans le code.
+
+
+# ── REQUÊTES HTTP EXTERNES ────────────────────
+httpx==0.28.0
+# Httpx : permet à Python de faire des requêtes
+# HTTP vers des APIs externes (comme AniList).
+# C'est l'équivalent de fetch() en JavaScript,
+# mais pour Python. Supporte l'async (important
+# pour ne pas bloquer le serveur pendant un appel API).
+
+
+# ── TRADUCTION ────────────────────────────────
+deepl==1.21.0
+# DeepL : SDK officiel pour l'API de traduction DeepL.
+# On l'utilise pour traduire automatiquement les
+# synopsis d'animés de l'anglais vers le français.
+# Free tier = 500 000 caractères/mois.
